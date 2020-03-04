@@ -534,20 +534,28 @@ void _blockdev_set_exported_object_flush_fua(ocf_core_t core)
 	ocf_volume_t core_vol = ocf_core_get_volume(core);
 	ocf_volume_t cache_vol = ocf_cache_get_volume(cache);
 	struct bd_object *bd_core_vol, *bd_cache_vol;
-	struct request_queue *core_q, *exp_q, *cache_q;
+	struct request_queue *core_q, *exp_q, *cache_q = NULL;
 	bool flush, fua;
 
 	BUG_ON(!cache_vol);
 
 	bd_core_vol = bd_object(core_vol);
-	bd_cache_vol = bd_object(cache_vol);
+
+	/* TODO: Check if DRAM device */
+	/* bd_cache_vol = bd_object(cache_vol); */
+	bd_cache_vol = NULL;
 
 	core_q = casdisk_functions.casdsk_disk_get_queue(bd_core_vol->dsk);
 	exp_q = casdisk_functions.casdsk_exp_obj_get_queue(bd_core_vol->dsk);
-	cache_q = casdisk_functions.casdsk_disk_get_queue(bd_cache_vol->dsk);
+	if (bd_cache_vol)
+		cache_q = casdisk_functions.casdsk_disk_get_queue(bd_cache_vol->dsk);
 
-	flush = (CAS_CHECK_QUEUE_FLUSH(core_q) || CAS_CHECK_QUEUE_FLUSH(cache_q));
-	fua = (CAS_CHECK_QUEUE_FUA(core_q) || CAS_CHECK_QUEUE_FUA(cache_q));
+	flush = CAS_CHECK_QUEUE_FLUSH(core_q);
+	fua = CAS_CHECK_QUEUE_FUA(core_q);
+	if (cache_q) {
+		flush |= CAS_CHECK_QUEUE_FLUSH(cache_q);
+		fua |= CAS_CHECK_QUEUE_FUA(cache_q);
+	}
 
 	cas_set_queue_flush_fua(exp_q, flush, fua);
 #endif
@@ -572,14 +580,12 @@ static int _blockdev_calc_discard_alignment(ocf_cache_t cache,
 }
 
 static void _blockdev_set_discard_properties(ocf_cache_t cache,
-		struct request_queue *exp_q, struct block_device *cache_bd,
+		struct request_queue *exp_q,
 		struct block_device *core_bd, sector_t core_sectors)
 {
 	struct request_queue *core_q;
-	struct request_queue *cache_q;
 
 	core_q = bdev_get_queue(core_bd);
-	cache_q = bdev_get_queue(cache_bd);
 
 	CAS_QUEUE_FLAG_SET(QUEUE_FLAG_DISCARD, exp_q);
 
@@ -622,17 +628,24 @@ static int _blockdev_set_geometry(struct casdsk_disk *dsk, void *private)
 	cache_vol = ocf_cache_get_volume(cache);
 	BUG_ON(!cache_vol);
 
-	bd_cache_vol = bd_object(cache_vol);
+	/* TODO: Check here if cache vol is DRAM. */
+	/* bd_cache_vol = bd_object(cache_vol); */
+	bd_cache_vol = NULL;
 	path = ocf_volume_get_uuid(core_vol)->data;
 
 	core_bd = casdisk_functions.casdsk_disk_get_blkdev(dsk);
 	BUG_ON(!core_bd);
 
-	cache_bd = casdisk_functions.casdsk_disk_get_blkdev(bd_cache_vol->dsk);
-	BUG_ON(!cache_bd);
+	if (bd_cache_vol) {
+		cache_bd = casdisk_functions.casdsk_disk_get_blkdev(bd_cache_vol->dsk);
+		BUG_ON(!cache_bd);
+		cache_q = cache_bd->bd_disk->queue;
+	} else {
+		cache_bd = NULL;
+		cache_q = NULL;
+	}
 
 	core_q = core_bd->bd_contains->bd_disk->queue;
-	cache_q = cache_bd->bd_disk->queue;
 	exp_q = casdisk_functions.casdsk_exp_obj_get_queue(dsk);
 
 	sectors = ocf_volume_get_length(core_vol) >> SECTOR_SHIFT;
@@ -656,7 +669,7 @@ static int _blockdev_set_geometry(struct casdsk_disk *dsk, void *private)
 
 	_blockdev_set_exported_object_flush_fua(core);
 
-	_blockdev_set_discard_properties(cache, exp_q, cache_bd, core_bd,
+	_blockdev_set_discard_properties(cache, exp_q, core_bd,
 			sectors);
 
 	return 0;

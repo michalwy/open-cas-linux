@@ -75,6 +75,24 @@ long cas_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 		RETURN_CMD_RESULT(cmd_info, arg, retval);
 	}
 
+	case KCAS_IOCTL_START_DRAM_CACHE: {
+		struct kcas_start_dram_cache *cmd_info;
+		struct ocf_mngt_cache_config cfg;
+		struct ocf_mngt_cache_device_config device_cfg;
+
+		GET_CMD_INFO(cmd_info, arg);
+
+		retval = cache_mngt_prepare_dram_cache_cfg(&cfg, &device_cfg,
+				cmd_info);
+		if (retval)
+			RETURN_CMD_RESULT(cmd_info, arg, retval);
+
+		retval = cache_mngt_init_instance_dram(&cfg, &device_cfg, cmd_info);
+
+		RETURN_CMD_RESULT(cmd_info, arg, retval);
+	}
+
+
 	case KCAS_IOCTL_STOP_CACHE: {
 		struct kcas_stop_cache *cmd_info;
 		char cache_name[OCF_CACHE_NAME_SIZE];

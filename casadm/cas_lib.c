@@ -1017,6 +1017,83 @@ int start_cache(uint16_t cache_id, unsigned int cache_init,
 	return SUCCESS;
 }
 
+int start_dram_cache(uint16_t cache_id, unsigned int dram_capacity,
+		ocf_cache_mode_t cache_mode,
+		ocf_eviction_t eviction_policy_type,
+		ocf_cache_line_size_t line_size)
+{
+	int fd = 0;
+	struct kcas_start_dram_cache cmd;
+	struct cache_device **caches;
+	struct cache_device *cache;
+	int i, status, caches_count;
+	double min_free_ram_gb;
+
+	fd = open_ctrl_device();
+	if (fd == -1)
+		return FAILURE;
+
+	if (cache_id == 0) {
+		cache_id = 1;
+		caches = get_cache_devices(&caches_count);
+		if (caches != NULL) {
+			psort(caches, caches_count, sizeof(struct cache_device*), caches_compare);
+			for (i = 0; i < caches_count; ++i) {
+				if (caches[i]->id == cache_id) {
+					cache_id += 1;
+				}
+			}
+
+			free_cache_devices_list(caches, caches_count);
+		}
+	}
+
+	memset(&cmd, 0, sizeof(cmd));
+
+	cmd.cache_id = cache_id;
+	cmd.dram_capacity = dram_capacity;
+	cmd.caching_mode = cache_mode;
+	cmd.eviction_policy = eviction_policy_type;
+	cmd.line_size = line_size;
+
+	if (run_ioctl_interruptible(fd, KCAS_IOCTL_START_DRAM_CACHE, &cmd,
+			"Starting cache", cache_id, OCF_CORE_ID_INVALID) < 0) {
+		close(fd);
+		if (cmd.ext_err_code == OCF_ERR_NO_FREE_RAM) {
+			min_free_ram_gb = cmd.min_free_ram;
+			min_free_ram_gb /= GiB;
+
+			cas_printf(LOG_ERR, "Not enough free RAM.\n"
+					"You need at least %0.2gGB to start cache"
+					" with cache line size equal %llukB.\n",
+					min_free_ram_gb, line_size / KiB);
+
+			if (64 * KiB > line_size)
+				cas_printf(LOG_ERR, "Try with greater cache line size.\n");
+
+			return FAILURE;
+		} else {
+			cas_printf(LOG_ERR, "Error inserting cache %d\n", cache_id);
+			print_err(cmd.ext_err_code);
+			return FAILURE;
+		}
+	}
+
+	status = SUCCESS;
+
+	close(fd);
+
+	if (status == SUCCESS) {
+		cas_printf(LOG_INFO, "Successfully added cache instance %u\n", cache_id);
+	} else {
+		cas_printf(LOG_ERR, "Failed to start cache\n");
+		return FAILURE;
+	}
+
+	return SUCCESS;
+}
+
+
 int stop_cache(uint16_t cache_id, int flush)
 {
 	int fd = 0;

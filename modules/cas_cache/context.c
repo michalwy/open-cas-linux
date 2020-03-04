@@ -467,6 +467,13 @@ int cas_initialize_context(void)
 		goto err_rpool;
 	}
 
+	ret = dram_dev_init();
+	if (ret) {
+		printk(KERN_ERR "Cannot initialize DRAM device layer\n");
+		goto err_rpool;
+
+	}
+
 	return 0;
 
 err_rpool:

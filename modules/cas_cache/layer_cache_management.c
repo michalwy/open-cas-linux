@@ -393,7 +393,10 @@ static int exit_instance_finish(ocf_cache_t cache, int error)
 
 struct _cache_mngt_attach_context {
 	struct _cache_mngt_async_context async;
-	struct kcas_start_cache *cmd;
+	union {
+		struct kcas_start_cache *ssd;
+		struct kcas_start_dram_cache *dram;
+	} cmd;
 	struct ocf_mngt_cache_device_config *device_cfg;
 	ocf_cache_t cache;
 	int ocf_start_error;
@@ -1549,6 +1552,56 @@ int cache_mngt_prepare_cache_cfg(struct ocf_mngt_cache_config *cfg,
 	return 0;
 }
 
+int cache_mngt_prepare_dram_cache_cfg(struct ocf_mngt_cache_config *cfg,
+		struct ocf_mngt_cache_device_config *device_cfg,
+		struct kcas_start_dram_cache *cmd)
+{
+	char cache_name[OCF_CACHE_NAME_SIZE];
+	uint16_t cache_id;
+
+	if (!cmd)
+		return -OCF_ERR_INVAL;
+
+	if (cmd->cache_id == OCF_CACHE_ID_INVALID) {
+		cache_id = find_free_cache_id(cas_ctx);
+		if (cache_id == OCF_CACHE_ID_INVALID)
+			return -OCF_ERR_INVAL;
+
+		cmd->cache_id = cache_id;
+	}
+
+	cache_name_from_id(cache_name, cmd->cache_id);
+
+	memset(cfg, 0, sizeof(*cfg));
+	memset(device_cfg, 0, sizeof(*device_cfg));
+
+	strncpy(cfg->name, cache_name, OCF_CACHE_NAME_SIZE - 1);
+	cfg->cache_mode = cmd->caching_mode;
+	cfg->cache_line_size = cmd->line_size;
+	cfg->eviction_policy = cmd->eviction_policy;
+	cfg->promotion_policy = ocf_promotion_default;
+	cfg->cache_line_size = cmd->line_size;
+	cfg->pt_unaligned_io = !unaligned_io;
+	cfg->use_submit_io_fast = !use_io_scheduler;
+	cfg->locked = true;
+	cfg->metadata_volatile = true;
+	cfg->metadata_layout = metadata_layout;
+
+	cfg->backfill.max_queue_size = max_writeback_queue_size;
+	cfg->backfill.queue_unblock_size = writeback_queue_unblock_size;
+
+	device_cfg->uuid.data = vmalloc(sizeof(cmd->dram_capacity));
+	*(unsigned int *)device_cfg->uuid.data = cmd->dram_capacity;
+	device_cfg->uuid.size = sizeof(cmd->dram_capacity);
+	device_cfg->cache_line_size = cmd->line_size;
+	device_cfg->force = true;
+	device_cfg->perform_test = false;
+	device_cfg->discard_on_start = false;
+	device_cfg->volume_type = DRAM_DEVICE_VOLUME;
+
+	return 0;
+}
+
 static void _cache_mngt_log_cache_device_path(ocf_cache_t cache,
 		struct ocf_mngt_cache_device_config *device_cfg)
 {
@@ -1636,11 +1689,13 @@ static void init_instance_complete(struct _cache_mngt_attach_context *ctx,
 	name = block_dev_get_elevator_name(
 			casdsk_disk_get_queue(bd_cache_obj->dsk));
 	if (name)
-		strlcpy(ctx->cmd->cache_elevator,
+		strlcpy(ctx->cmd.ssd->cache_elevator,
 				name, MAX_ELEVATOR_NAME);
 }
 
 static void _cache_mngt_start_complete(ocf_cache_t cache, void *priv,
+		int error);
+static void _cache_mngt_start_dram_complete(ocf_cache_t cache, void *priv,
 		int error);
 
 static void cache_start_finalize(struct work_struct *work)
@@ -1679,6 +1734,41 @@ static void cache_start_finalize(struct work_struct *work)
 	ocf_mngt_cache_unlock(cache);
 }
 
+static void cache_start_dram_finalize(struct work_struct *work)
+{
+	struct _cache_mngt_attach_context *ctx =
+		container_of(work, struct _cache_mngt_attach_context, work);
+	int result;
+	ocf_cache_t cache = ctx->cache;
+
+	result = cas_cls_init(cache);
+	if (result) {
+		ctx->ocf_start_error = result;
+		return _cache_mngt_start_dram_complete(cache, ctx, result);
+	}
+	ctx->cls_inited = true;
+
+	result = cache_mngt_initialize_core_objects(cache);
+	if (result) {
+		ctx->ocf_start_error = result;
+		return _cache_mngt_start_dram_complete(cache, ctx, result);
+	}
+
+	ocf_core_visit(cache, _cache_mngt_core_device_loaded_visitor,
+			NULL, false);
+
+	if (_cache_mngt_async_callee_set_result(&ctx->async, 0)) {
+		/* caller interrupted */
+		ctx->ocf_start_error = 0;
+		ocf_mngt_cache_stop(cache,
+				_cache_mngt_cache_stop_rollback_complete, ctx);
+		return;
+	}
+
+	ocf_mngt_cache_unlock(cache);
+}
+
+
 static void _cache_mngt_start_complete(ocf_cache_t cache, void *priv, int error)
 {
 	struct _cache_mngt_attach_context *ctx = priv;
@@ -1687,7 +1777,7 @@ static void _cache_mngt_start_complete(ocf_cache_t cache, void *priv, int error)
 	if (caller_status || error) {
 		if (error == -OCF_ERR_NO_FREE_RAM) {
 			ocf_mngt_get_ram_needed(cache, ctx->device_cfg,
-					&ctx->cmd->min_free_ram);
+					&ctx->cmd.ssd->min_free_ram);
 		} else if (caller_status == -KCAS_ERR_WAITING_INTERRUPTED) {
 			printk(KERN_WARNING "Cache added successfully, "
 					"but waiting interrupted. Rollback\n");
@@ -1702,6 +1792,29 @@ static void _cache_mngt_start_complete(ocf_cache_t cache, void *priv, int error)
 		schedule_work(&ctx->work);
 	}
 }
+
+static void _cache_mngt_start_dram_complete(ocf_cache_t cache, void *priv, int error)
+{
+	struct _cache_mngt_attach_context *ctx = priv;
+	int caller_status = _cache_mngt_async_callee_peek_result(&ctx->async);
+
+	if (caller_status || error) {
+		if (error == -OCF_ERR_NO_FREE_RAM) {
+			ocf_mngt_get_ram_needed(cache, ctx->device_cfg,
+					&ctx->cmd.dram->min_free_ram);
+		} else if (caller_status == -KCAS_ERR_WAITING_INTERRUPTED) {
+			printk(KERN_WARNING "Cache added successfully, "
+					"but waiting interrupted. Rollback\n");
+		}
+		ctx->ocf_start_error = error;
+		ocf_mngt_cache_stop(cache, _cache_mngt_cache_stop_rollback_complete,
+				ctx);
+	} else {
+		INIT_WORK(&ctx->work, cache_start_dram_finalize);
+		schedule_work(&ctx->work);
+	}
+}
+
 
 static int _cache_mngt_cache_priv_init(ocf_cache_t cache)
 {
@@ -1803,7 +1916,7 @@ static int _cache_mngt_start(struct ocf_mngt_cache_config *cfg,
 		return -ENOMEM;
 
 	context->device_cfg = device_cfg;
-	context->cmd = cmd;
+	context->cmd.ssd = cmd;
 	_cache_mngt_async_context_init(&context->async);
 
 	/* Start cache. Returned cache instance will be locked as it was set
@@ -1858,6 +1971,72 @@ err:
 	return result;
 }
 
+static int _cache_mngt_start_dram(struct ocf_mngt_cache_config *cfg,
+		struct ocf_mngt_cache_device_config *device_cfg,
+		struct kcas_start_dram_cache *cmd)
+{
+	struct _cache_mngt_attach_context *context;
+	ocf_cache_t cache;
+	ocf_queue_t mngt_queue = NULL;
+	struct cache_priv *cache_priv;
+	int result = 0, rollback_result = 0;
+
+	context = kzalloc(sizeof(*context), GFP_KERNEL);
+	if (!context)
+		return -ENOMEM;
+
+	context->device_cfg = device_cfg;
+	context->cmd.dram = cmd;
+	_cache_mngt_async_context_init(&context->async);
+
+	/* Start cache. Returned cache instance will be locked as it was set
+	 * in configuration.
+	 */
+	result = ocf_mngt_cache_start(cas_ctx, &cache, cfg);
+	if (result) {
+		kfree(context);
+		module_put(THIS_MODULE);
+		return result;
+	}
+	context->cache = cache;
+
+	result = _cache_mngt_cache_priv_init(cache);
+	if (result)
+		goto err;
+	context->priv_inited = true;
+
+	result = _cache_mngt_start_queues(cache);
+	if (result)
+		goto err;
+
+	cache_priv = ocf_cache_get_priv(cache);
+	mngt_queue = cache_priv->mngt_queue;
+
+	ocf_mngt_cache_attach(cache, device_cfg,
+			      _cache_mngt_start_dram_complete, context);
+	result = wait_for_completion_interruptible(&context->async.cmpl);
+
+	result = _cache_mngt_async_caller_set_result(&context->async, result);
+
+	if (result != -KCAS_ERR_WAITING_INTERRUPTED)
+		kfree(context);
+
+	return result;
+err:
+	ocf_mngt_cache_stop(cache, _cache_mngt_cache_stop_rollback_complete,
+			context);
+	rollback_result = wait_for_completion_interruptible(&context->async.cmpl);
+
+	rollback_result = _cache_mngt_async_caller_set_result(&context->async,
+			rollback_result);
+
+	if (rollback_result != -KCAS_ERR_WAITING_INTERRUPTED)
+		kfree(context);
+
+	return result;
+}
+
+
 int cache_mngt_init_instance(struct ocf_mngt_cache_config *cfg,
 		struct ocf_mngt_cache_device_config *device_cfg,
 		struct kcas_start_cache *cmd)
@@ -1866,6 +2045,16 @@ int cache_mngt_init_instance(struct ocf_mngt_cache_config *cfg,
 		return -KCAS_ERR_SYSTEM;
 
 	return _cache_mngt_start(cfg, device_cfg, cmd);
+}
+
+int cache_mngt_init_instance_dram(struct ocf_mngt_cache_config *cfg,
+		struct ocf_mngt_cache_device_config *device_cfg,
+		struct kcas_start_dram_cache *cmd)
+{
+	if (!try_module_get(THIS_MODULE))
+		return -KCAS_ERR_SYSTEM;
+
+	return _cache_mngt_start_dram(cfg, device_cfg, cmd);
 }
 
 /**

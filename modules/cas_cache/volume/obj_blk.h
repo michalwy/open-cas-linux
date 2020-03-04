@@ -8,6 +8,7 @@
 
 #include "vol_atomic_dev_bottom.h"
 #include "vol_block_dev_bottom.h"
+#include "vol_dram_dev_bottom.h"
 #include "vol_block_dev_top.h"
 
 struct casdsk_disk;

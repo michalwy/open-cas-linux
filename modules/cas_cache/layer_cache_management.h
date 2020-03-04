@@ -50,7 +50,11 @@ int cache_mngt_prepare_cache_cfg(struct ocf_mngt_cache_config *cfg,
 		struct atomic_dev_params *atomic_params,
 		struct kcas_start_cache *cmd);
 
-int cache_mngt_core_pool_get_paths(struct kcas_core_pool_path *cmd_info);
+int cache_mngt_prepare_dram_cache_cfg(struct ocf_mngt_cache_config *cfg,
+		struct ocf_mngt_cache_device_config *device_cfg,
+		struct kcas_start_dram_cache *cmd);
+
+		int cache_mngt_core_pool_get_paths(struct kcas_core_pool_path *cmd_info);
 
 int cache_mngt_core_pool_remove(struct kcas_core_pool_remove *cmd_info);
 
@@ -62,6 +66,10 @@ int cache_mngt_prepare_core_cfg(struct ocf_mngt_core_config *cfg,
 int cache_mngt_init_instance(struct ocf_mngt_cache_config *cfg,
 		struct ocf_mngt_cache_device_config *device_cfg,
 		struct kcas_start_cache *cmd);
+
+int cache_mngt_init_instance_dram(struct ocf_mngt_cache_config *cfg,
+		struct ocf_mngt_cache_device_config *device_cfg,
+		struct kcas_start_dram_cache *cmd);
 
 int cache_mngt_set_seq_cutoff_threshold(ocf_cache_t cache, ocf_core_t core,
 		uint32_t thresh);

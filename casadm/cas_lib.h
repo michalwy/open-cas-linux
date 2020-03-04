@@ -124,6 +124,10 @@ int start_cache(uint16_t cache_id, unsigned int cache_init,
 		const char *cache_device, ocf_cache_mode_t cache_mode,
 		ocf_eviction_t eviction_policy_type,
 		ocf_cache_line_size_t line_size, int force);
+int start_dram_cache(uint16_t cache_id, unsigned int dram_capacity,
+		ocf_cache_mode_t cache_mode,
+		ocf_eviction_t eviction_policy_type,
+		ocf_cache_line_size_t line_size);
 int stop_cache(uint16_t cache_id, int flush);
 
 #ifdef WI_AVAILABLE

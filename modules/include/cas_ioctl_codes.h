@@ -85,6 +85,44 @@ struct kcas_start_cache {
 	int ext_err_code;
 };
 
+struct kcas_start_dram_cache {
+	/**
+	 * id of newely inserted cache (in range 1-OCF_CACHE_ID_MAX).
+	 */
+	uint16_t cache_id;
+
+	unsigned int dram_capacity;
+
+	/**
+	 * caching mode for new cache instance
+	 * valid choices are:
+	 * * WRITE_THROUGH
+	 * * WRITE_BACK
+	 * * WRITE_AROUND
+	 * * PASS_THROUGH
+	 */
+	ocf_cache_mode_t caching_mode;
+
+	/**
+	 * eviction policy to be used for newely configured cache instance.
+	 */
+	ocf_eviction_t eviction_policy;
+
+	uint8_t flush_data; /**< should data be flushed? */
+
+	/**
+	 * cache line size
+	 */
+	ocf_cache_line_size_t line_size;
+
+	uint64_t min_free_ram; /**< Minimum free RAM memory for cache metadata */
+
+	char cache_elevator[MAX_ELEVATOR_NAME];
+
+	int ext_err_code;
+};
+
+
 struct kcas_stop_cache {
 	uint16_t cache_id; /**< id of cache to be stopped */
 
@@ -410,6 +448,7 @@ struct kcas_get_cache_param {
  *    32    *    KCAS_IOCTL_SET_CACHE_PARAM                 *    OK            *
  *    33    *    KCAS_IOCTL_GET_CACHE_PARAM                 *    OK            *
  *    34    *    KCAS_IOCTL_GET_STATS                       *    OK            *
+ *    35    *    KCAS_IOCTL_START_DRAM_CACHE                *    OK            *
  *******************************************************************************
  */
 
@@ -500,6 +539,7 @@ struct kcas_get_cache_param {
 /** Get stats of particular OCF object */
 #define KCAS_IOCTL_GET_STATS _IOR(KCAS_IOCTL_MAGIC, 34, struct kcas_get_stats)
 
+#define KCAS_IOCTL_START_DRAM_CACHE _IOWR(KCAS_IOCTL_MAGIC, 35, struct kcas_start_dram_cache)
 /**
  * Extended kernel CAS error codes
  */

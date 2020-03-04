@@ -47,6 +47,7 @@ enum {
 	BLOCK_DEVICE_VOLUME = 1,	/**< block device volume */
 	ATOMIC_DEVICE_VOLUME,		/**< block device volume with atomic
 					     metadata support */
+	DRAM_DEVICE_VOLUME,
 /** \cond SKIP_IN_DOC */
 	OBJECT_TYPE_MAX,
 	NVME_CONTROLLER

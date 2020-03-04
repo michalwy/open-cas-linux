@@ -57,6 +57,7 @@ struct command_args{
 	int no_flush;
 	const char* cache_device;
 	const char* core_device;
+	unsigned int dram_capacity;
 	uint32_t params_type;
 	uint32_t params_count;
 	bool verbose;
@@ -83,6 +84,7 @@ static struct command_args command_args_values = {
 		.no_flush = false,
 		.cache_device = NULL,
 		.core_device = NULL,
+		.dram_capacity = 0,
 
 		.params_type = 0,
 		.params_count = 0,
@@ -226,6 +228,35 @@ int start_cache_command_handle_option(char *opt, const char **arg)
 	return 0;
 }
 
+int start_dram_cache_command_handle_option(char *opt, const char **arg)
+{
+	if (!strcmp(opt, "cache-id")) {
+		if (validate_str_num(arg[0], "cache id", OCF_CACHE_ID_MIN, OCF_CACHE_ID_MAX) == FAILURE)
+			return FAILURE;
+
+		command_args_values.cache_id = atoi(arg[0]);
+	} else if (!strcmp(opt, "dram-capacity")) {
+		if (validate_str_num(arg[0], "DRAM capacity", 1, 8192) == FAILURE)
+			return FAILURE;
+
+		command_args_values.dram_capacity = atoi(arg[0]);
+	} else if (!strcmp(opt, "cache-mode")) {
+		command_args_values.cache_mode =
+				validate_str_cache_mode((const char*)arg[0]);
+
+		if (command_args_values.cache_mode < 0)
+			return FAILURE;
+	} else if (!strcmp(opt, "cache-line-size")) {
+		if (validate_str_num_sbd(arg[0], "cache line size", ocf_cache_line_size_min / KiB,
+				ocf_cache_line_size_max / KiB) == FAILURE)
+			return FAILURE;
+
+		command_args_values.line_size = atoi((const char*)arg[0]) * KiB;
+	}
+
+	return 0;
+}
+
 #define xstr(s) str(s)
 #define str(s) #s
 
@@ -250,6 +281,14 @@ static cli_option start_options[] = {
 	{'i', "cache-id", CACHE_ID_DESC_LONG, 1, "ID", 0},
 	{'l', "load", "Load cache metadata from caching device (DANGEROUS - see manual or Admin Guide for details)"},
 	{'f', "force", "Force the creation of cache instance"},
+	{'c', "cache-mode", "Set cache mode from available: {"CAS_CLI_HELP_START_CACHE_MODES"} "CAS_CLI_HELP_START_CACHE_MODES_FULL"; without this parameter Write-Through will be set by default", 1, "NAME"},
+	{'x', "cache-line-size", "Set cache line size in kibibytes: {4,8,16,32,64}[KiB] (default: %d)", 1, "NUMBER",  CLI_OPTION_DEFAULT_INT, 0, 0, ocf_cache_line_size_default / KiB},
+	{0}
+};
+
+static cli_option start_dram_options[] = {
+	{'d', "dram-capacity", "Amount of DRAM (in GiB) to be used as cache", 1, "DRAM", CLI_OPTION_REQUIRED},
+	{'i', "cache-id", CACHE_ID_DESC_LONG, 1, "ID", 0},
 	{'c', "cache-mode", "Set cache mode from available: {"CAS_CLI_HELP_START_CACHE_MODES"} "CAS_CLI_HELP_START_CACHE_MODES_FULL"; without this parameter Write-Through will be set by default", 1, "NAME"},
 	{'x', "cache-line-size", "Set cache line size in kibibytes: {4,8,16,32,64}[KiB] (default: %d)", 1, "NUMBER",  CLI_OPTION_DEFAULT_INT, 0, 0, ocf_cache_line_size_default / KiB},
 	{0}
@@ -333,6 +372,19 @@ int handle_start()
 			command_args_values.eviction_policy_type,
 			command_args_values.line_size,
 			command_args_values.force);
+
+	return status;
+}
+
+int handle_dram_start()
+{
+	int status;
+
+	status = start_dram_cache(command_args_values.cache_id,
+			command_args_values.dram_capacity,
+			command_args_values.cache_mode,
+			command_args_values.eviction_policy_type,
+			command_args_values.line_size);
 
 	return status;
 }
@@ -1925,6 +1977,17 @@ static cli_command cas_commands[] = {
 			.options = start_options,
 			.command_handle_opts = start_cache_command_handle_option,
 			.handle = handle_start,
+			.flags = CLI_SU_REQUIRED,
+			.help = NULL,
+		},
+		{
+			.name = "start-dram-cache",
+			.short_name = 'M',
+			.desc = "Start new DRAM cache instance",
+			.long_desc = NULL,
+			.options = start_dram_options,
+			.command_handle_opts = start_dram_cache_command_handle_option,
+			.handle = handle_dram_start,
 			.flags = CLI_SU_REQUIRED,
 			.help = NULL,
 		},
